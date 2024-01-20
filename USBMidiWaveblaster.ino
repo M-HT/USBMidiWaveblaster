@@ -29,15 +29,11 @@
 #include "hardware_config.h"
 #include "usb_midi.h"
 #include "usb_midi_device.h"
+#include "config.h"
 
-enum MidiRouteSourceDest {
-  FROM_SERIAL,
-  FROM_USB,
-  TO_SERIAL,
-  TO_USB,
-} ;
+#define LED_FLASH_TIME 5
+#define LED_IDLE_TIME  500
 
-// Use this structure to send and receive packet to/from USB /serial/BUS
 typedef union  {
     uint32_t i;
     uint8_t  packet[4];
@@ -45,157 +41,266 @@ typedef union  {
 
 // Serial interfaces Array
 HardwareSerial * serialHw[SERIAL_INTERFACE_MAX] = {SERIALS_PLIST};
+uint32_t serialSpeed[SERIAL_INTERFACE_MAX];
 
 // USB Midi object & globals
 USBMidi MidiUSB;
-volatile bool					midiUSBCx      = false;
-bool 					isSerialBusy   = false ;
+bool midiUSBCx    = false;
+bool isSerialBusy = false;
 
-/////////////////////////////// END GLOBALS ///////////////////////////////////
+bool ledStatus;
 
-///////////////////////////////////////////////////////////////////////////////
-// Send a USB midi packet to ad-hoc serial MIDI
-///////////////////////////////////////////////////////////////////////////////
-static void SerialMidi_SendPacket(const midiPacket_t *pk, uint8_t serialNo)
+uint8_t runningStatus = 0;
+uint8_t lastPort = 0xFF;
+uint8_t portSelection[2] = { 0xF5, 0x01 };
+
+// Write data to all enabled serial ports
+void SerialWrite(uint8_t *data, uint8_t len)
 {
-  if (serialNo >= SERIAL_INTERFACE_MAX ) return;
+    for ( uint8_t s = 0; s < SERIAL_INTERFACE_MAX ; s++ )
+    {
+        if ( serialSpeed[s] == 0 ) continue;
 
-	uint8_t msgLen = USBMidi::CINToLenTable[pk->packet[0] & 0x0F] ;
- 	if ( msgLen > 0 ) {
-		serialHw[serialNo]->write(&(pk->packet[1]),msgLen);
-	}
+        serialHw[s]->write(data, len);
+    }
 }
 
-///////////////////////////////////////////////////////////////////////////////
-// THE MIDI PACKET ROUTER
-//-----------------------------------------------------------------------------
-// Route a packet from a midi IN jack / USB OUT to
-// a midi OUT jacks / USB IN  or I2C remote serial midi on another device
-///////////////////////////////////////////////////////////////////////////////
-static void RoutePacketToTarget(uint8_t source, const midiPacket_t *pk)
+// Process MIDI 1.0 packet
+void ProcessPacket(midiPacket_t *pk)
 {
-  // NB : we use the same routine to route USB and serial/ I2C .
-	// The Cable can be the serial port # if coming from local serial
-  uint8_t port  = pk->packet[0] >> 4;
+    uint8_t port = pk->packet[0] >> 4;
+    uint8_t cin  = pk->packet[0] & 0x0F;
 
-	// Check at the physical level (i.e. not the bus)
-  if ( source == FROM_USB && port >= USBCABLE_INTERFACE_MAX ) return;
+#if USB_MIDI_IO_PORT_NUM < 16
+    if (port >= USB_MIDI_IO_PORT_NUM)
+    {
+        // Ignore packets from unused ports
+        return;
+    }
+#endif
 
-  uint8_t cin   = pk->packet[0] & 0x0F ;
+    uint8_t msgLen = USBMidi::CINToLenTable[cin];
 
-	// ROUTING tables
-	uint16_t serialOutTargets ;
+#if USB_MIDI_IO_PORT_NUM >= 2
+    switch ( cin )
+    {
+        case 0x02: // Two-byte System Common messages like MTC, SongSelect, etc.
+        case 0x03: // Three-byte System Common messages like SPP, etc.
+        case 0x05: // Single-byte System Common Message or SysEx ends with following single byte.
+        case 0x06: // SysEx ends with following two bytes.
+        case 0x07: // SysEx ends with following three bytes.
+            // Ignore Port Selection messages "F5 nn" or other non-standard "F5" messages (1-3 bytes)
+            if ( pk->packet[1] == 0xF5 ) msgLen = 0;
+            break;
+        case 0x0F: // Single Byte
+            // Only allow System RealTime messages
+            if ( pk->packet[1] < 0xF8 ) msgLen = 0;
+            break;
+        default:
+            break;
+    }
+#endif
 
-  if (source == FROM_USB ) {
-      serialOutTargets = 1 << port;
-  }
+    if ( msgLen > 0 )
+    {
+#if USB_MIDI_IO_PORT_NUM >= 2
+        // If last message came from different port, then send Port Selection message "F5 nn"
+        if ( port != lastPort )
+        {
+            runningStatus = 0;
+            lastPort = port;
+            portSelection[1] = port + 1;
+            SerialWrite(portSelection, 2);
+        }
+#endif
 
-  else return; // Error.
-
-
-	// ROUTING FROM ANY SOURCE PORT TO SERIAL TARGETS //////////////////////////
-	// A target match ?
-  if ( serialOutTargets) {
-				for (	uint16_t t=0; t<SERIAL_INTERFACE_MAX ; t++)
-					if ( (serialOutTargets & ( 1 << t ) ) ) {
-								// Route to local serial if bus mode disabled
-								SerialMidi_SendPacket(pk,t);
-					}
-	} // serialOutTargets
-
-  // Stop here if no USB connection (owned by the master).
-  // If we are a slave, the master should have notified us
-  if ( ! midiUSBCx ) return;
-
+#if defined(CFG_SERIAL_RUNNING_STATUS) && CFG_SERIAL_RUNNING_STATUS > 0
+        // Implement Running Status when sending data to maximize available bandwidth
+        if (pk->packet[1] >= 0xF8)
+        {
+            // RealTime messages
+            SerialWrite(&pk->packet[1], msgLen);
+        }
+        else if (pk->packet[1] >= 0xF0)
+        {
+            // System Common messages
+            runningStatus = 0;
+            SerialWrite(&pk->packet[1], msgLen);
+        }
+        else if (pk->packet[1] >= 0x80)
+        {
+            if (pk->packet[1] == runningStatus)
+            {
+                // Don't send Running Status byte
+                if (msgLen > 1)
+                {
+                    SerialWrite(&pk->packet[2], msgLen - 1);
+                }
+            }
+            else
+            {
+                // Update Running Status
+                runningStatus = pk->packet[1];
+                SerialWrite(&pk->packet[1], msgLen);
+            }
+        }
+        else
+#endif
+        {
+            SerialWrite(&pk->packet[1], msgLen);
+        }
+    }
 }
 
-///////////////////////////////////////////////////////////////////////////////
-// MIDI USB initiate connection if master
-// + Set USB descriptor strings
-///////////////////////////////////////////////////////////////////////////////
-void USBMidi_Init()
+// Turn LED on
+void LED_TurnOn(void)
 {
-	MidiUSB.begin() ;
-  delay(4000); // Usually around 4 s to detect USB Midi on the host
+    if (!ledStatus)
+    {
+        ledStatus = true;
+        digitalWrite(LED_CONNECT, LOW);
+    }
 }
 
-///////////////////////////////////////////////////////////////////////////////
-// MIDI USB Loop Process
-///////////////////////////////////////////////////////////////////////////////
-void USBMidi_Process()
+// Turn LED off
+void LED_TurnOff(void)
 {
-	// Try to connect/reconnect USB if we detect a high level on USBDM
-	// This is to manage the case of a powered device without USB active or suspend mode for ex.
-	if ( MidiUSB.isConnected() ) {
-
-    midiUSBCx = true;
-
-		// Do we have a MIDI USB packet available ?
-		if ( MidiUSB.available() ) {
-
-			// Read a Midi USB packet .
-			if ( !isSerialBusy ) {
-				midiPacket_t pk ;
-				pk.i = MidiUSB.readPacket();
-				RoutePacketToTarget( FROM_USB,  &pk );
-			} else {
-					isSerialBusy = false ;
-			}
-		}
-	}
-	// Are we physically connected to USB
-	else {
-       midiUSBCx = false;
-  }
+    if (ledStatus)
+    {
+        ledStatus = false;
+        digitalWrite(LED_CONNECT, HIGH);
+    }
 }
 
-///////////////////////////////////////////////////////////////////////////////
-// I2C Loop Process for SERIAL MIDI
-///////////////////////////////////////////////////////////////////////////////
-void SerialMidi_Process()
-{
-	// LOCAL SERIAL JACK MIDI IN PROCESS
-	for ( uint8_t s = 0; s< SERIAL_INTERFACE_MAX  ; s++ )
-	{
-				// Do we have any MIDI msg on Serial 1 to n ?
-				if ( serialHw[s]->available() ) {
-					 serialHw[s]->read();
-				}
-
-				// Manage Serial contention vs USB
-				// When one or more of the serial buffer is full, we block USB read one round.
-				// This implies to use non blocking Serial.write(buff,len).
-				if (  midiUSBCx &&  !serialHw[s]->availableForWrite() ) isSerialBusy = true; // 1 round without reading USB
-	}
-}
-
-///////////////////////////////////////////////////////////////////////////////
-// SETUP
-///////////////////////////////////////////////////////////////////////////////
 void setup()
 {
+    Serial.end();
 
-    // MIDI MODE START HERE ==================================================
+    // Initialize LED pin as an output
+    pinMode(LED_CONNECT, OUTPUT);
+    ledStatus = false;
+    digitalWrite(LED_CONNECT, HIGH);
+
+    // Prepare serial ports speed
+    for ( uint8_t s=0; s != SERIAL_INTERFACE_MAX ; s++ ) serialSpeed[s] = 0;
+
+#if SERIAL_INTERFACE_MAX >= 1 && defined(CFG_SERIAL_PORT_1_SPEED)
+    serialSpeed[0] = CFG_SERIAL_PORT_1_SPEED;
+#endif
+#if SERIAL_INTERFACE_MAX >= 2 && defined(CFG_SERIAL_PORT_2_SPEED)
+    serialSpeed[1] = CFG_SERIAL_PORT_2_SPEED;
+#endif
+#if SERIAL_INTERFACE_MAX >= 3 && defined(CFG_SERIAL_PORT_3_SPEED)
+    serialSpeed[2] = CFG_SERIAL_PORT_3_SPEED;
+#endif
+#if SERIAL_INTERFACE_MAX >= 4 && defined(CFG_SERIAL_PORT_4_SPEED)
+    serialSpeed[3] = CFG_SERIAL_PORT_4_SPEED;
+#endif
 
     // MIDI SERIAL PORTS set Baud rates and parser inits
     // To compile with the 4 serial ports, you must use the right variant : STMF103RC
-    // + Set parsers filters in the same loop.  All messages including on the fly SYSEX.
 
-    for ( uint8_t s=0; s < SERIAL_INTERFACE_MAX ; s++ ) {
-      serialHw[s]->begin(31250);
+    for ( uint8_t s=0; s != SERIAL_INTERFACE_MAX ; s++ )
+    {
+        if ( serialSpeed[s] == 0 ) continue;
+
+        serialHw[s]->begin(serialSpeed[s]);
     }
 
-    // Midi USB only if master when bus is enabled or master/slave
-        USBMidi_Init();
+    // Configure USB MIDI parameters
+#if defined(CFG_USB_MIDI_VENDORID) && (CFG_USB_MIDI_PRODUCTID)
+    usb_midi_set_vid_pid(CFG_USB_MIDI_VENDORID, CFG_USB_MIDI_PRODUCTID);
+#endif
+#ifdef CFG_USB_MIDI_PRODUCT_STRING
+    usb_midi_set_product_string(CFG_USB_MIDI_PRODUCT_STRING);
+#endif
+#ifdef CFG_USB_MIDI_JACK_STRING
+    usb_midi_set_jack_string(CFG_USB_MIDI_JACK_STRING);
+#endif
 
+    MidiUSB.begin() ;
+    while (! MidiUSB.isConnected() ) delay(100); // Usually around 4 s to detect USB Midi on the host
 }
 
-///////////////////////////////////////////////////////////////////////////////
-// LOOP
-///////////////////////////////////////////////////////////////////////////////
 void loop()
 {
-		USBMidi_Process();
+    static unsigned long turnOnMillis = 0;
+    static unsigned long turnOffMillis = 0;
+    static bool turnOffEnabled = false;
+    unsigned long currentMillis = millis();
 
-		SerialMidi_Process();
+    // Process incoming USB packets
+    if ( MidiUSB.isConnected() )
+    {
+        // Turn LED off after flash timeout
+        if (turnOffEnabled && currentMillis > turnOffMillis)
+        {
+            turnOffEnabled = false;
+            LED_TurnOff();
+        }
+
+        // Turn on LED after idle timeout
+        if (currentMillis > turnOnMillis)
+        {
+            turnOnMillis = currentMillis + LED_IDLE_TIME;
+            LED_TurnOn();
+        }
+
+        midiUSBCx = true;
+
+        // Do we have a MIDI USB packet available ?
+        if ( MidiUSB.available() )
+        {
+            // Set idle timeout
+            turnOnMillis = currentMillis + LED_IDLE_TIME;
+
+            // Read a Midi USB packet .
+            if ( !isSerialBusy )
+            {
+                midiPacket_t pk;
+                pk.i = MidiUSB.readPacket();
+
+                // Turn LED on and set flash timeout
+                turnOffMillis = currentMillis + LED_FLASH_TIME;
+                turnOffEnabled = true;
+                LED_TurnOn();
+
+                ProcessPacket(&pk);
+            }
+            else
+            {
+                isSerialBusy = false;
+            }
+        }
+    }
+    // Are we physically connected to USB
+    else
+    {
+        runningStatus = 0;
+        lastPort = 0xFF;
+
+        // Turn LED off
+        turnOffEnabled = false;
+        LED_TurnOff();
+
+        midiUSBCx = false;
+    }
+
+
+    // Process Serial ports
+    for ( uint8_t s = 0; s < SERIAL_INTERFACE_MAX ; s++ )
+    {
+        if ( serialSpeed[s] == 0 ) continue;
+
+        // Do we have any MIDI msg on Serial 1 to n ?
+        if ( serialHw[s]->available() )
+        {
+            serialHw[s]->read();
+        }
+
+        // Manage Serial contention vs USB
+        // When one or more of the serial buffer is full, we block USB read one round.
+        // This implies to use non blocking Serial.write(buff,len).
+        if (  midiUSBCx &&  !serialHw[s]->availableForWrite() ) isSerialBusy = true; // 1 round without reading USB
+    }
 }

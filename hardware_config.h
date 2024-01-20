@@ -63,11 +63,6 @@
   #endif
 #endif
 
-  #define USBCABLE_INTERFACE_MAX USB_MIDI_IO_PORT_NUM
-
-  // USBDM (USB -) PIN
-  #define PIN_USBDM PA11
-
 #endif
 
 

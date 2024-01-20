@@ -167,21 +167,91 @@ void usb_midi_set_product_string(char stringDescriptor[]) {
   // Check the true string descriptor size allocated by manual declaration
   // in usb_midi_descriptor.c. It is critical !!!
 
-  // fill the existing string descriptor with 0
-  memset(&usbMIDIDescriptor_iProduct.bString,0, (USB_MIDI_PRODUCT_STRING_SIZE)*2+2);
-
   // Copy string to the descriptor. The string must be zero ending !!!
   uint8_t i = 0;
   while ( stringDescriptor[i] != 0 ) {
     // The string is wide characters type.  2 bytes / char.
     usbMIDIDescriptor_iProduct.bString[i*2] = stringDescriptor[i];
+    usbMIDIDescriptor_iProduct.bString[i*2+1] = 0;
     if (++i >= USB_MIDI_PRODUCT_STRING_SIZE ) break;
   }
 
   // Adjust the length
-  usbMIDIDescriptor_iProduct.bLength = i*2+2;
-  usbMIDIString_Descriptor[usbMIDIDescriptor_Device.iProduct].Descriptor_Size = i*2+2;
+  usbMIDIDescriptor_iProduct.bLength = USB_DESCRIPTOR_STRING_LEN(i);
+  usbMIDIString_Descriptor[usbMIDIDescriptor_Device.iProduct].Descriptor_Size = USB_DESCRIPTOR_STRING_LEN(i);
 
+}
+
+static void usb_midi_set_jack_string_1(usb_descriptor_string *usbMIDIDescriptor_iJack, char stringDescriptor[]) {
+  int stringLength = ( usbMIDIDescriptor_iJack->bLength - USB_DESCRIPTOR_STRING_LEN(0) ) / 2;
+#if USB_MIDI_IO_PORT_NUM > 1
+  if ( stringLength <= 3 ) return;
+  stringLength -= 3;
+#endif
+
+  // Copy string to the descriptor. The input string must be zero ending !!!
+  uint8_t i = 0;
+  while ( stringDescriptor[i] != 0 ) {
+    // The string is wide characters type.  2 bytes / char.
+    usbMIDIDescriptor_iJack->bString[i*2] = stringDescriptor[i];
+    usbMIDIDescriptor_iJack->bString[i*2+1] = 0;
+    if ( ++i >= stringLength ) break;
+  }
+
+  // Fill remaining length with spaces
+  for ( ; i < stringLength ; ++i) {
+    usbMIDIDescriptor_iJack->bString[i*2] = ' ';
+    usbMIDIDescriptor_iJack->bString[i*2+1] = 0;
+  }
+}
+
+void usb_midi_set_jack_string(char stringDescriptor[]) {
+  usb_midi_set_jack_string_1(&usbMIDIDescriptor_iJack1, stringDescriptor);
+#if USB_MIDI_IO_PORT_NUM >= 2
+  usb_midi_set_jack_string_1(&usbMIDIDescriptor_iJack2, stringDescriptor);
+#endif
+#if USB_MIDI_IO_PORT_NUM >= 3
+  usb_midi_set_jack_string_1(&usbMIDIDescriptor_iJack3, stringDescriptor);
+#endif
+#if USB_MIDI_IO_PORT_NUM >= 4
+  usb_midi_set_jack_string_1(&usbMIDIDescriptor_iJack4, stringDescriptor);
+#endif
+#if USB_MIDI_IO_PORT_NUM >= 5
+  usb_midi_set_jack_string_1(&usbMIDIDescriptor_iJack5, stringDescriptor);
+#endif
+#if USB_MIDI_IO_PORT_NUM >= 6
+  usb_midi_set_jack_string_1(&usbMIDIDescriptor_iJack6, stringDescriptor);
+#endif
+#if USB_MIDI_IO_PORT_NUM >= 7
+  usb_midi_set_jack_string_1(&usbMIDIDescriptor_iJack7, stringDescriptor);
+#endif
+#if USB_MIDI_IO_PORT_NUM >= 8
+  usb_midi_set_jack_string_1(&usbMIDIDescriptor_iJack8, stringDescriptor);
+#endif
+#if USB_MIDI_IO_PORT_NUM >= 9
+  usb_midi_set_jack_string_1(&usbMIDIDescriptor_iJack9, stringDescriptor);
+#endif
+#if USB_MIDI_IO_PORT_NUM >= 10
+  usb_midi_set_jack_string_1(&usbMIDIDescriptor_iJackA, stringDescriptor);
+#endif
+#if USB_MIDI_IO_PORT_NUM >= 11
+  usb_midi_set_jack_string_1(&usbMIDIDescriptor_iJackB, stringDescriptor);
+#endif
+#if USB_MIDI_IO_PORT_NUM >= 12
+  usb_midi_set_jack_string_1(&usbMIDIDescriptor_iJackC, stringDescriptor);
+#endif
+#if USB_MIDI_IO_PORT_NUM >= 13
+  usb_midi_set_jack_string_1(&usbMIDIDescriptor_iJackD, stringDescriptor);
+#endif
+#if USB_MIDI_IO_PORT_NUM >= 14
+  usb_midi_set_jack_string_1(&usbMIDIDescriptor_iJackE, stringDescriptor);
+#endif
+#if USB_MIDI_IO_PORT_NUM >= 15
+  usb_midi_set_jack_string_1(&usbMIDIDescriptor_iJackF, stringDescriptor);
+#endif
+#if USB_MIDI_IO_PORT_NUM >= 16
+  usb_midi_set_jack_string_1(&usbMIDIDescriptor_iJack10, stringDescriptor);
+#endif
 }
 
 
@@ -373,7 +443,6 @@ uint32_t usb_midi_peek(uint32* buf, uint32_t packets) {
 
 uint32_t usb_midi_mark_read(uint32_t n_copied) {
     /* Mark bytes as read. */
-    /* Mark bytes as read. */
     n_unread_packets -= n_copied;
     rx_offset += n_copied;
 
@@ -545,7 +614,7 @@ static uint8* usb_midi_GetConfigDescriptor(uint16_t length) {
 static uint8* usb_midi_GetStringDescriptor(uint16_t length) {
     uint8_t wValue0 = pInformation->USBwValue0;
 
-    if (wValue0 > USB_MIDI_N_STRING_DESCRIPTORS) {
+    if (wValue0 >= USB_MIDI_N_STRING_DESCRIPTORS) {
         return NULL;
     }
     return Standard_GetDescriptorData(length, &usbMIDIString_Descriptor[wValue0]);

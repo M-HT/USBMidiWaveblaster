@@ -47,8 +47,8 @@
 #include "usb_core.h"
 #include "usb_def.h"
 
-// EEPROM parameters
-//#include "EEPROM_Params.h"
+/* user configuration */
+#include "config.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -60,6 +60,7 @@ extern "C" {
 
 void usb_midi_set_vid_pid(uint16_t vid, uint16_t pid);
 void usb_midi_set_product_string(char stringDescriptor[]);
+void usb_midi_set_jack_string(char stringDescriptor[]);
 
 void usb_midi_enable(gpio_dev *disc_dev, uint8_t disc_bit, uint8_t level);
 void usb_midi_disable(gpio_dev *disc_dev, uint8_t disc_bit, uint8_t level);
@@ -82,41 +83,28 @@ uint8_t usb_midi_is_transmitting(void);
 // --------------------------------------------------------------------------------------
 // MIDI PORTS
 // --------------------------------------------------------------------------------------
-// To define the number of Midi ports, uncomment the right line below.
-//#define USB_MIDI_4X4
-//#define USB_MIDI_8X8
-#define USB_MIDI_16X16
-
-#if !defined(USB_MIDI_4X4) && !defined(USB_MIDI_8X8) && !defined(USB_MIDI_16X16)
-  #define USB_MIDI_4X4
-  #warning "4 USB midi ports defined by default. Please check usb_midi_device.h"
-#endif
-
-#ifdef USB_MIDI_16X16
-  #define USB_MIDI_IO_PORT_NUM  16
-  #warning "16 USB midi ports defined"
+// Number of Midi ports (1-16)
+#ifdef CFG_USB_MIDI_IO_PORT_NUM
+ #if CFG_USB_MIDI_IO_PORT_NUM < 1
+  #define USB_MIDI_IO_PORT_NUM 1
+ #elif CFG_USB_MIDI_IO_PORT_NUM > 16
+  #define USB_MIDI_IO_PORT_NUM 16
+ #else
+  #define USB_MIDI_IO_PORT_NUM CFG_USB_MIDI_IO_PORT_NUM
+ #endif
 #else
-  #ifdef USB_MIDI_8X8
-    #define USB_MIDI_IO_PORT_NUM  8
-    #warning "8 USB midi ports defined"
-  #else
-    // By default
-    #define USB_MIDI_IO_PORT_NUM  4
-    #warning "4 USB midi ports defined"
-  #endif
+ #define USB_MIDI_IO_PORT_NUM 1
 #endif
 
 // --------------------------------------------------------------------------------------
 // DESCRIPTOR IDS
 // --------------------------------------------------------------------------------------
 
-#define USB_MIDI_VENDORID            0x2912
-#define USB_MIDI_PRODUCTID           0x1970
-#define USB_MIDI_PRODUCT_STRING      "USB MIDIKliK 4x4"
-#define USB_MIDI_PRODUCT_SERIAL      "07DA0908"
+#define USB_MIDI_VENDORID            0xF055
+#define USB_MIDI_PRODUCTID           0x5742
+#define USB_MIDI_PRODUCT_STRING      "Waveblaster"
 
 // String buffer Size in the descriptor without tailing zero.
-// The real buffer size is USB_MIDI_PRODUCT_STRING_SIZE*2 +2
 #define USB_MIDI_PRODUCT_STRING_SIZE 30
 
 // --------------------------------------------------------------------------------------
@@ -143,8 +131,13 @@ uint8_t usb_midi_is_transmitting(void);
 #define MIDI_JACK_EMBEDDED                0x01
 #define MIDI_JACK_EXTERNAL                0x02
 
-//#define MAX_POWER (100 >> 1)
-#define USB_MIDI_MAX_POWER (100 >> 1)
+#if defined(CFG_USB_MIDI_LOW_POWER) && CFG_USB_MIDI_LOW_POWER > 0
+ // Low-power device (100 mA)
+ #define USB_MIDI_MAX_POWER (100 >> 1)
+#else
+ // High-power device (500 mA)
+ #define USB_MIDI_MAX_POWER (500 >> 1)
+#endif
 
 // --------------------------------------------------------------------------------------
 // ENDPOINTS
