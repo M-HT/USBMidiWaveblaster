@@ -129,6 +129,13 @@ void ProcessPacket(midiPacket_t *pk)
         }
         else if (pk->packet[1] >= 0x80)
         {
+            if (pk->packet[1] <= 0x8F && msgLen >= 3 && pk->packet[1] != runningStatus)
+            {
+                // Send note off event as note on with zero velocity to increase the chance of using running status
+                pk->packet[1] |= 0x10;
+                pk->packet[3] = 0;
+            }
+
             if (pk->packet[1] == runningStatus)
             {
                 // Don't send Running Status byte
