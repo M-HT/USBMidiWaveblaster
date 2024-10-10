@@ -706,9 +706,9 @@ static const usb_descriptor_string usbMIDIDescriptor_iManufacturer = {
 };
 
 
-// We reserve room to change the product string later but the lenght is manually adjusted to 16.
+// We reserve room to change the product string later but the lenght is manually adjusted to 11.
 static usb_descriptor_string usbMIDIDescriptor_iProduct = {
-    .bLength = USB_DESCRIPTOR_STRING_LEN(16),
+    .bLength = USB_DESCRIPTOR_STRING_LEN(11),
     .bDescriptorType = USB_DESCRIPTOR_TYPE_STRING,
     .bString =  { 'W', 0, 'a', 0, 'v', 0, 'e', 0, 'b', 0, 'l', 0, 'a', 0, 's', 0, 't', 0 ,'e', 0,  // 10
                   'r', 0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0,  0 , 0 , 0 , 0,  // 20
@@ -889,7 +889,7 @@ static ONE_DESCRIPTOR usbMidiConfig_Descriptor = {
 static ONE_DESCRIPTOR usbMIDIString_Descriptor[USB_MIDI_N_STRING_DESCRIPTORS] = {
     {(uint8*)&usbMIDIDescriptor_LangID,       USB_DESCRIPTOR_STRING_LEN(1) },
     {(uint8*)&usbMIDIDescriptor_iManufacturer,USB_DESCRIPTOR_STRING_LEN(11)},
-    {(uint8*)&usbMIDIDescriptor_iProduct,     USB_DESCRIPTOR_STRING_LEN(16)},
+    {(uint8*)&usbMIDIDescriptor_iProduct,     USB_DESCRIPTOR_STRING_LEN(11)},
     {(uint8*)&usbMIDIDescriptor_iInterface,   USB_DESCRIPTOR_STRING_LEN(4) },
 #if USB_MIDI_IO_PORT_NUM <= 1
     {(uint8*)&usbMIDIDescriptor_iJack1,       USB_DESCRIPTOR_STRING_LEN(11)},
